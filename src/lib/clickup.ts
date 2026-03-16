@@ -53,3 +53,34 @@ export async function getTeamTasks(teamId: string, userId: string = 'default_use
 
   return data;
 }
+
+export async function getTask(taskId: string, userId: string = 'default_user') {
+  const storedTokens = await getTokens(userId);
+  if (!storedTokens) throw new Error('User not authenticated');
+  
+  const accessToken = decrypt(storedTokens.access_token);
+  const response = await fetch(`https://api.clickup.com/api/v2/task/${taskId}`, {
+    headers: { 'Authorization': accessToken }
+  });
+
+  if (!response.ok) throw new Error('ClickUp API Error');
+  return await response.json();
+}
+
+export async function createTask(listId: string, taskData: any, userId: string = 'default_user') {
+  const storedTokens = await getTokens(userId);
+  if (!storedTokens) throw new Error('User not authenticated');
+  
+  const accessToken = decrypt(storedTokens.access_token);
+  const response = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, {
+    method: 'POST',
+    headers: { 
+      'Authorization': accessToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(taskData)
+  });
+
+  if (!response.ok) throw new Error('ClickUp API Error');
+  return await response.json();
+}
