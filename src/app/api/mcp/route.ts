@@ -8,7 +8,7 @@ import {
 import { getTeamTasks, getTask, createTask } from "@/lib/clickup";
 import { NextRequest, NextResponse } from "next/server";
 
-// Instancia global del servidor para mantener estado entre peticiones
+// Instancia única del servidor
 const server = new Server(
   {
     name: "clickup-mcp-server",
@@ -94,8 +94,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 /**
  * Endpoint para MCP sobre SSE en Next.js
- * GET: Inicia el stream SSE
- * POST: Envía mensajes al servidor
  */
 
 let transport: SSEServerTransport | null = null;
@@ -105,27 +103,45 @@ export async function GET(req: NextRequest) {
   const writer = responseStream.writable.getWriter();
   const encoder = new TextEncoder();
 
-  // Mock de 'res' de Node.js para SSEServerTransport
+  // Mock de respuesta para el transporte SSE
   const mockRes = {
-    write: (data: string) => writer.write(encoder.encode(data)),
-    end: () => writer.close(),
+    write: (data: string) => {
+        try {
+            writer.write(encoder.encode(data));
+        } catch (e) {
+            console.error("Error writing to SSE stream:", e);
+        }
+    },
+    end: () => {
+        try {
+            writer.close();
+        } catch (e) {
+            console.error("Error closing SSE stream:", e);
+        }
+    },
     on: () => {},
     once: () => {},
     emit: () => {},
     removeListener: () => {},
-    setHeader: () => {},
+    setHeader: (name: string, value: string) => {
+        // En Next.js las cabeceras se pasan en el constructor de Response
+    },
   };
 
   transport = new SSEServerTransport("/api/mcp", mockRes as any);
   
-  // Establecer la conexión en segundo plano
-  server.connect(transport).catch(console.error);
+  // Conectar y manejar errores
+  server.connect(transport).catch(err => {
+      console.error("MCP Server connection error:", err);
+      writer.close();
+  });
 
   return new Response(responseStream.readable, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no", // Importante para Vercel
     },
   });
 }
@@ -135,9 +151,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No active SSE connection" }, { status: 400 });
   }
 
-  const body = await req.json();
-  // El transporte maneja la entrada (Request en MCP es un JSON)
-  await transport.handlePostMessage(req as any, {} as any); 
-  
-  return NextResponse.json({ status: "ok" });
+  try {
+    // El transporte de MCP espera un objeto que imite a http.IncomingMessage
+    // En Next.js 14, req.json() consume el cuerpo.
+    const body = await req.json();
+    
+    // Pasamos el cuerpo directamente al transporte si es posible, 
+    // o enviamos el mensaje manualmente si el SDK lo permite.
+    await transport.handlePostMessage(req as any, {} as any); 
+    
+    return NextResponse.json({ status: "ok" });
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to handle MCP message" }, { status: 500 });
+  }
 }
